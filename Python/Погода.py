@@ -1,6 +1,9 @@
 import requests
 import pandas as pd
 from datetime import datetime
+from openpyxl import load_workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 # Выполняем GET запрос к API
 url = 'https://weather.sakhalin.gov.ru/api/air/now'
@@ -104,17 +107,136 @@ if response.status_code == 200:
     # Создаем DataFrame
     df = pd.DataFrame(processed_data)
     
-    # Сохраняем в Excel файл с русским именем
+    # Сохраняем в Excel файл
     filename = f'погодные_данные.xlsx'
-    df.to_excel(filename, index=False, engine='openpyxl')
+    
+    # Создаем Excel файл с оформлением
+    with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+        df.to_excel(writer, sheet_name='Погодные данные', index=False)
+        
+        # Получаем рабочий лист
+        worksheet = writer.sheets['Погодные данные']
+        
+        # Определяем стили
+        header_font = Font(name='Arial', size=11, bold=True, color='FFFFFF')
+        header_fill = PatternFill(start_color='2F5597', end_color='2F5597', fill_type='solid')
+        header_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        
+        cell_font = Font(name='Arial', size=10)
+        cell_alignment = Alignment(horizontal='left', vertical='center')
+        cell_alignment_center = Alignment(horizontal='center', vertical='center')
+        
+        # Границы
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        
+        # Применяем стили к заголовкам и настраиваем ширину колонок
+        for col in range(1, len(df.columns) + 1):
+            cell = worksheet.cell(row=1, column=col)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+            cell.border = thin_border
+            
+            # Безопасное вычисление ширины колонки
+            try:
+                # Получаем данные колонки, заменяем None на пустые строки
+                column_data = df.iloc[:, col-1].fillna('').astype(str)
+                max_data_length = column_data.map(len).max() if len(column_data) > 0 else 0
+                header_length = len(str(df.columns[col-1]))
+                max_length = max(max_data_length, header_length)
+                adjusted_width = min(max_length + 2, 40)  # Ограничиваем максимальную ширину 40
+                worksheet.column_dimensions[get_column_letter(col)].width = adjusted_width
+            except Exception as e:
+                # Если возникла ошибка, ставим стандартную ширину
+                worksheet.column_dimensions[get_column_letter(col)].width = 15
+        
+        # Применяем стили к ячейкам с данными
+        for row in range(2, len(df) + 2):
+            for col in range(1, len(df.columns) + 1):
+                cell = worksheet.cell(row=row, column=col)
+                cell.font = cell_font
+                cell.border = thin_border
+                
+                # Выравнивание для разных типов данных
+                if col in [1, 2, 4, 5]:  # ID, Внешний ID, Широта, Долгота
+                    cell.alignment = cell_alignment_center
+                else:
+                    cell.alignment = cell_alignment
+                
+                # Добавляем формат для чисел с плавающей точкой
+                if isinstance(cell.value, float):
+                    cell.number_format = '0.00'
+        
+        # Закрепляем первую строку (заголовок)
+        worksheet.freeze_panes = 'A2'
+        
+        # Добавляем фильтр
+        worksheet.auto_filter.ref = worksheet.dimensions
+        
+        # Добавляем чередование цветов для строк
+        for row in range(2, len(df) + 2):
+            if row % 2 == 0:
+                for col in range(1, len(df.columns) + 1):
+                    cell = worksheet.cell(row=row, column=col)
+                    cell.fill = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid')
+    
+    # Функция для раскраски AQI
+    def colorize_aqi():
+        wb = load_workbook(filename)
+        ws = wb['Погодные данные']
+        
+        # Находим колонку с AQI
+        aqi_col = None
+        for col in range(1, ws.max_column + 1):
+            if ws.cell(row=1, column=col).value == 'Индекс качества воздуха (AQI)':
+                aqi_col = col
+                break
+        
+        # Раскрашиваем ячейки AQI
+        if aqi_col:
+            for row in range(2, ws.max_row + 1):
+                cell = ws.cell(row=row, column=aqi_col)
+                aqi_value = cell.value
+                
+                if aqi_value is not None:
+                    try:
+                        aqi_value = float(aqi_value)
+                        if aqi_value <= 3:
+                            cell.fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')  # Зеленый - хороший
+                            cell.font = Font(color='006100', bold=True)
+                        elif aqi_value <= 4:
+                            cell.fill = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')  # Желтый - средний
+                            cell.font = Font(color='9C6500', bold=True)
+                        else:
+                            cell.fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')  # Красный - плохой
+                            cell.font = Font(color='9C0006', bold=True)
+                    except (ValueError, TypeError):
+                        pass
+        
+        wb.save(filename)
+    
+    # Применяем раскраску AQI
+    colorize_aqi()
     
     print(f"\n✅ Данные успешно сохранены в файл: {filename}")
     print(f"📊 Всего записей: {len(df)}")
     print(f"📋 Столбцов в файле: {len(df.columns)}")
+    print(f"\n🎨 Применено оформление:")
+    print(f"  • Синий заголовок с белым текстом")
+    print(f"  • Автоподбор ширины колонок")
+    print(f"  • Чередование цветов строк")
+    print(f"  • Цветовая индикация AQI (зеленый/желтый/красный)")
+    print(f"  • Закрепленная шапка")
+    print(f"  • Фильтры для данных")
     print(f"\nСписок столбцов:")
     for col in df.columns:
         print(f"  • {col}")
     
 else:
     print(f"❌ Ошибка при получении данных: {response.status_code}")
-    print(f"Текст ошибки: {response.text}")       
+    print(f"Текст ошибки: {response.text}")
